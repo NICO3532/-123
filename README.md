@@ -1,1 +1,6 @@
-# -123
+![icon](https://github.com/user-attachments/assets/52b44db1-200d-4bc8-8622-0246c3571a8c)
+[styles.css](https://github.com/user-attachments/files/30484472/styles.css)[vercel.json](https://github.com/user-attachments/files/30484477/vercel.json)
+[sw.js](https://github.com/user-attachments/files/30484476/sw.js)
+[index.html](https://github.com/user-attachments/files/30484475/index.html)
+[hotspots.js](https://github.com/user-attachments/files/30484474/hotspots.js)
+[sync.js](https://github.com/user-attachments/files/30484473/sync.js)

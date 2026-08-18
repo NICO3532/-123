@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<title>声控提词器</title>
+<title>声控提词器 · 稳定版</title>
 <style>
   :root{
     --bg:#070707;
@@ -63,10 +63,11 @@
   }
   .teleprompter::-webkit-scrollbar{display:none}
   .script{
+    user-select:none;-webkit-user-select:none;
     max-width:1100px;margin:0 auto;font-size:44px;line-height:1.7;font-weight:650;letter-spacing:.01em;
     white-space:pre-wrap;word-break:break-word;color:#6f6f6f
   }
-  .chunk{transition:color .22s ease,opacity .22s ease}
+  .chunk{transition:color .22s ease,opacity .22s ease;cursor:pointer;-webkit-tap-highlight-color:transparent}
   .chunk.past{color:#333}
   .chunk.current{color:#fff;text-shadow:0 0 24px rgba(255,255,255,.08)}
   .chunk.future{color:#737373}
@@ -152,7 +153,7 @@
       <button id="fullscreenBtn" class="btn">全屏</button>
       <div class="hint">
         推荐 Chrome / Edge。首次使用请允许麦克风权限。<br>
-        它不是按音量机械滚动，而是识别你读到的内容，再把对应文字移动到视线中心。
+        单向跟随：自动识别只会从当前句进入下一句，不会跳回已经读过的句子。需要回退时，直接点击那一句。
       </div>
     </aside>
 
@@ -201,6 +202,8 @@
   let normToRaw = [];
   let chunks = [];
   let currentNormIndex = 0;
+  let currentChunkIndex = 0;
+  let currentChunkProgress = 0;
   let restartTimer = null;
   let lastMoveAt = 0;
 
@@ -229,7 +232,7 @@
       const start = rawPos;
       rawPos += part.length;
       const end = rawPos;
-      result.push({text:part,start,end,el:null});
+      result.push({text:part,start,end,norm:[...part].map(normalizeChar).join(''),el:null});
     }
     return result;
   }
@@ -238,47 +241,34 @@
     rawScript = els.scriptInput.value.trim();
     els.script.innerHTML = '';
     els.emptyState.style.display = rawScript ? 'none' : 'flex';
-
     if(!rawScript) return;
-
     buildNormalized(rawScript);
     chunks = chunkScript(rawScript);
-
     chunks.forEach((chunk, i) => {
       const span = document.createElement('span');
       span.className = 'chunk future';
       span.dataset.index = i;
       span.textContent = chunk.text;
       chunk.el = span;
+      span.addEventListener('click', () => setChunk(i, 0, true));
       els.script.appendChild(span);
     });
-
     currentNormIndex = 0;
+    currentChunkIndex = 0;
+    currentChunkProgress = 0;
     updateHighlight(0, false);
     els.teleprompter.scrollTop = 0;
     localStorage.setItem('voiceTeleprompterScript', rawScript);
   }
 
-  function rawIndexFromNorm(normIndex){
-    if(!normToRaw.length) return 0;
-    return normToRaw[Math.max(0, Math.min(normToRaw.length-1, normIndex))] || 0;
-  }
-
-  function updateHighlight(normIndex, shouldScroll=true){
-    const rawIndex = rawIndexFromNorm(normIndex);
-    let currentChunk = 0;
-
-    chunks.forEach((chunk, i) => {
-      if(rawIndex >= chunk.start && rawIndex <= chunk.end) currentChunk = i;
-    });
-
+  function updateHighlight(_normIndex, shouldScroll=true){
+    const currentChunk = Math.max(0, Math.min(chunks.length - 1, currentChunkIndex));
     chunks.forEach((chunk, i) => {
       chunk.el.classList.remove('past','current','future');
       if(i < currentChunk) chunk.el.classList.add('past');
       else if(i === currentChunk) chunk.el.classList.add('current');
       else chunk.el.classList.add('future');
     });
-
     if(shouldScroll && chunks[currentChunk]?.el){
       const now = performance.now();
       if(now - lastMoveAt > 120){
@@ -288,87 +278,65 @@
     }
   }
 
-  function findSpeechPosition(transcript){
-    const heard = [...transcript].map(normalizeChar).join('');
-    if(!heard || !normalizedScript) return null;
+  function setChunk(index, progress=0, shouldScroll=true){
+    currentChunkIndex = Math.max(0, Math.min(chunks.length - 1, index));
+    currentChunkProgress = Math.max(0, progress);
+    updateHighlight(currentNormIndex, shouldScroll);
+  }
 
-    const sensitivity = Number(els.sensitivity.value);
+  function allOccurrences(haystack, needle){
+    const out=[];
+    if(!needle) return out;
+    let at=0;
+    while(true){
+      const pos=haystack.indexOf(needle, at);
+      if(pos===-1) break;
+      out.push(pos);
+      at=pos+1;
+    }
+    return out;
+  }
 
-    // 核心原则：优先在当前位置附近找，不允许因为短词命中而突然跳到很远的后文。
-    const localBack = 18 + sensitivity * 4;
-    const localForward = 70 + sensitivity * 12;
-    const localFrom = Math.max(0, currentNormIndex - localBack);
-    const localTo = Math.min(normalizedScript.length, currentNormIndex + localForward);
-    const localWindow = normalizedScript.slice(localFrom, localTo);
-
-    // 先用较长尾句做精确匹配。短于 5 个有效字符的结果不用于推进。
-    const maxLen = Math.min(28, heard.length);
-    for(let len=maxLen; len>=5; len--){
-      const needle = heard.slice(-len);
-      const positions = [];
-      let searchAt = 0;
-      while(true){
-        const pos = localWindow.indexOf(needle, searchAt);
-        if(pos === -1) break;
-        positions.push(localFrom + pos + len - 1);
-        searchAt = pos + 1;
-      }
-
+  function bestExactTailMatch(heard, text, minLen){
+    const maxLen=Math.min(22, heard.length, text.length);
+    for(let len=maxLen; len>=minLen; len--){
+      const needle=heard.slice(-len);
+      const positions=allOccurrences(text, needle);
       if(positions.length){
-        // 若有多个相同片段，选离当前进度最近的，而不是第一个/最远的。
-        positions.sort((a,b) => Math.abs(a-currentNormIndex) - Math.abs(b-currentNormIndex));
-        const candidate = positions[0];
-        const jump = candidate - currentNormIndex;
-
-        // 平时每次最多向前推进约 45~80 个有效字符，防止随机远跳。
-        const maxNormalJump = 42 + sensitivity * 8;
-        if(jump <= maxNormalJump) return candidate;
+        return {len, pos:positions[positions.length-1] + len};
       }
     }
-
-    // 宽松匹配只在非常小的局部窗口内进行，且要求较高命中率。
-    const tail = heard.slice(-Math.min(12, heard.length));
-    if(tail.length >= 6){
-      let best = null;
-      for(let i=localFrom;i<localTo;i++){
-        let hits = 0;
-        let a = 0, b = i;
-        while(a < tail.length && b < localTo){
-          if(tail[a] === normalizedScript[b]){
-            hits++; a++; b++;
-          }else{
-            b++;
-          }
-          if(b - i > tail.length + 3) break;
-        }
-        const ratio = hits / tail.length;
-        if(ratio >= 0.78){
-          const candidate = Math.min(b - 1, normalizedScript.length - 1);
-          const distance = Math.abs(candidate - currentNormIndex);
-          const score = ratio * 100 - distance * 0.35;
-          if(!best || score > best.score) best = {index:candidate, score};
-        }
-      }
-      if(best && best.index - currentNormIndex <= 50 + sensitivity * 6){
-        return best.index;
-      }
-    }
-
-    // 只有当识别到了很长的一段完整文本时，才允许“重新定位”到更远位置。
-    // 这用于用户手动跳读，而不是日常连续朗读。
-    if(heard.length >= 16){
-      const anchor = heard.slice(-16);
-      const globalStart = Math.max(0, currentNormIndex - 20);
-      const farPos = normalizedScript.indexOf(anchor, globalStart);
-      if(farPos !== -1){
-        const candidate = farPos + anchor.length - 1;
-        const jump = candidate - currentNormIndex;
-        // 远跳需要至少 16 个连续字符完全匹配，且单次仍限制在 180 字以内。
-        if(jump >= 0 && jump <= 180) return candidate;
-      }
-    }
-
     return null;
+  }
+
+  function findSpeechPosition(transcript){
+    const heard=[...transcript].map(normalizeChar).join('');
+    if(!heard || !chunks.length) return null;
+    const cur=chunks[currentChunkIndex];
+    const next=chunks[currentChunkIndex + 1];
+    if(!cur) return null;
+    const curMatch=bestExactTailMatch(heard, cur.norm, 4);
+    if(curMatch){
+      currentChunkProgress=Math.max(currentChunkProgress, curMatch.pos);
+    }
+    if(next){
+      const completion=cur.norm.length ? currentChunkProgress / cur.norm.length : 1;
+      const required = completion >= 0.55 ? 5 : 8;
+      const nextMatch=bestExactTailMatch(heard, next.norm, required);
+      if(nextMatch){
+        const curTail=cur.norm.slice(Math.max(0, cur.norm.length - 6));
+        const hasBridge = curTail.length >= 4 && heard.includes(curTail);
+        const strongNext = nextMatch.len >= 9;
+        if(completion >= 0.55 || hasBridge || strongNext){
+          currentChunkIndex += 1;
+          currentChunkProgress = nextMatch.pos;
+          updateHighlight(currentNormIndex, true);
+          return {chunk: currentChunkIndex, progress: currentChunkProgress};
+        }
+      }
+    }
+    updateHighlight(currentNormIndex, false);
+    return curMatch ? {chunk: currentChunkIndex, progress: currentChunkProgress} : null;
   }
 
   function setStatus(text, live=false){
@@ -384,43 +352,30 @@
       els.transcript.textContent = '请使用最新版 Chrome 或 Edge 打开。';
       return;
     }
-
     recognition = new SpeechRecognition();
     recognition.lang = 'zh-CN';
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
-
     recognition.onstart = () => {
       listening = true;
       setStatus('正在听你说话', true);
       els.startBtn.textContent = '暂停声控';
     };
-
     recognition.onresult = (event) => {
       let interim = '';
       let finalText = '';
-
       for(let i=event.resultIndex;i<event.results.length;i++){
         const text = event.results[i][0].transcript;
         if(event.results[i].isFinal) finalText += text;
         else interim += text;
       }
-
       const spoken = (finalText || interim).trim();
       if(spoken){
         els.transcript.textContent = spoken;
-        const pos = findSpeechPosition(spoken);
-        if(pos !== null){
-          // 只允许很小幅回退，避免识别纠正时画面乱跳
-          if(pos >= currentNormIndex - 8){
-            currentNormIndex = Math.max(currentNormIndex, pos);
-            updateHighlight(currentNormIndex, true);
-          }
-        }
+        findSpeechPosition(spoken);
       }
     };
-
     recognition.onerror = (event) => {
       if(event.error === 'not-allowed' || event.error === 'service-not-allowed'){
         listening = false;
@@ -432,22 +387,14 @@
         els.transcript.textContent = '语音识别暂时中断：' + event.error;
       }
     };
-
     recognition.onend = () => {
       if(listening){
-        // Chrome 可能会自动结束会话，自动重启保持连续识别
         clearTimeout(restartTimer);
-        restartTimer = setTimeout(() => {
-          try{ recognition.start(); }catch(e){}
-        }, 220);
+        restartTimer = setTimeout(() => { try{ recognition.start(); }catch(e){} }, 220);
       }else{
         setStatus('已暂停');
         els.startBtn.textContent = '开始声控';
       }
-    };
-
-    recognition.onnomatch = () => {
-      // 不匹配时保持当前位置，不主动跳段
     };
   }
 
@@ -461,17 +408,16 @@
       els.startBtn.textContent = '开始声控';
     }else{
       if(!rawScript) renderScript();
-      try{
-        recognition.start();
-      }catch(e){
-        setTimeout(()=>{ try{ recognition.start(); }catch(_){} }, 250);
-      }
+      try{ recognition.start(); }
+      catch(e){ setTimeout(()=>{ try{ recognition.start(); }catch(_){} }, 250); }
     }
   }
 
   els.startBtn.addEventListener('click', startStop);
   els.resetBtn.addEventListener('click', () => {
     currentNormIndex = 0;
+    currentChunkIndex = 0;
+    currentChunkProgress = 0;
     updateHighlight(0, false);
     els.teleprompter.scrollTo({top:0,behavior:'smooth'});
   });
@@ -486,7 +432,6 @@
       else await document.exitFullscreen();
     }catch(e){}
   });
-
   els.fontSize.addEventListener('input', () => {
     els.script.style.fontSize = els.fontSize.value + 'px';
     els.fontSizeValue.textContent = els.fontSize.value + ' px';
@@ -498,7 +443,6 @@
   els.sensitivity.addEventListener('input', () => {
     els.sensitivityValue.textContent = els.sensitivity.value + ' / 5';
   });
-
   document.addEventListener('keydown', (e) => {
     if(e.target === els.scriptInput) return;
     if(e.code === 'Space'){
@@ -512,10 +456,8 @@
       els.teleprompter.scrollBy({top:-90,behavior:'smooth'});
     }
   });
-
   const saved = localStorage.getItem('voiceTeleprompterScript');
   if(saved) els.scriptInput.value = saved;
-
   renderScript();
   setupRecognition();
 })();

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gratitude-journal-v8';
+const CACHE_NAME = 'gratitude-journal-v7';
 const ASSETS = [
   './',
   './index.html',

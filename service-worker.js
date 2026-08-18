@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gratitude-journal-v7';
+const CACHE_NAME = 'gratitude-journal-v8';
 const ASSETS = [
   './',
   './index.html',
@@ -22,9 +22,6 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache-first: everything loads instantly from disk, no network round trip.
-// Falls back to network only if something's missing from cache, and
-// falls back to the cached shell if offline and the request isn't cached.
 self.addEventListener('fetch', (event) => {
   if(event.request.method !== 'GET') return;
 

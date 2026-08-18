@@ -293,38 +293,82 @@
     if(!heard || !normalizedScript) return null;
 
     const sensitivity = Number(els.sensitivity.value);
-    const minLen = Math.max(2, 6 - sensitivity);
-    const maxLen = 26;
-    const searchBack = 25 + sensitivity * 10;
-    const searchForward = 220 + sensitivity * 140;
 
-    const from = Math.max(0, currentNormIndex - searchBack);
-    const to = Math.min(normalizedScript.length, currentNormIndex + searchForward);
-    const windowText = normalizedScript.slice(from, to);
+    // 核心原则：优先在当前位置附近找，不允许因为短词命中而突然跳到很远的后文。
+    const localBack = 18 + sensitivity * 4;
+    const localForward = 70 + sensitivity * 12;
+    const localFrom = Math.max(0, currentNormIndex - localBack);
+    const localTo = Math.min(normalizedScript.length, currentNormIndex + localForward);
+    const localWindow = normalizedScript.slice(localFrom, localTo);
 
-    for(let len=Math.min(maxLen, heard.length); len>=minLen; len--){
+    // 先用较长尾句做精确匹配。短于 5 个有效字符的结果不用于推进。
+    const maxLen = Math.min(28, heard.length);
+    for(let len=maxLen; len>=5; len--){
       const needle = heard.slice(-len);
-      let pos = windowText.indexOf(needle);
-      if(pos !== -1){
-        return from + pos + len - 1;
+      const positions = [];
+      let searchAt = 0;
+      while(true){
+        const pos = localWindow.indexOf(needle, searchAt);
+        if(pos === -1) break;
+        positions.push(localFrom + pos + len - 1);
+        searchAt = pos + 1;
+      }
+
+      if(positions.length){
+        // 若有多个相同片段，选离当前进度最近的，而不是第一个/最远的。
+        positions.sort((a,b) => Math.abs(a-currentNormIndex) - Math.abs(b-currentNormIndex));
+        const candidate = positions[0];
+        const jump = candidate - currentNormIndex;
+
+        // 平时每次最多向前推进约 45~80 个有效字符，防止随机远跳。
+        const maxNormalJump = 42 + sensitivity * 8;
+        if(jump <= maxNormalJump) return candidate;
       }
     }
 
-    const tail = heard.slice(-Math.min(10, heard.length));
-    let best = null;
-    for(let i=from;i<to;i++){
-      let hits = 0;
-      let a = 0, b = i;
-      while(a < tail.length && b < to){
-        if(tail[a] === normalizedScript[b]){ hits++; a++; b++; }
-        else { b++; }
-        if(b - i > tail.length + 5) break;
+    // 宽松匹配只在非常小的局部窗口内进行，且要求较高命中率。
+    const tail = heard.slice(-Math.min(12, heard.length));
+    if(tail.length >= 6){
+      let best = null;
+      for(let i=localFrom;i<localTo;i++){
+        let hits = 0;
+        let a = 0, b = i;
+        while(a < tail.length && b < localTo){
+          if(tail[a] === normalizedScript[b]){
+            hits++; a++; b++;
+          }else{
+            b++;
+          }
+          if(b - i > tail.length + 3) break;
+        }
+        const ratio = hits / tail.length;
+        if(ratio >= 0.78){
+          const candidate = Math.min(b - 1, normalizedScript.length - 1);
+          const distance = Math.abs(candidate - currentNormIndex);
+          const score = ratio * 100 - distance * 0.35;
+          if(!best || score > best.score) best = {index:candidate, score};
+        }
       }
-      if(hits >= Math.max(3, Math.floor(tail.length * 0.65))){
-        if(!best || hits > best.hits) best = {index:b-1,hits};
+      if(best && best.index - currentNormIndex <= 50 + sensitivity * 6){
+        return best.index;
       }
     }
-    return best?.index ?? null;
+
+    // 只有当识别到了很长的一段完整文本时，才允许“重新定位”到更远位置。
+    // 这用于用户手动跳读，而不是日常连续朗读。
+    if(heard.length >= 16){
+      const anchor = heard.slice(-16);
+      const globalStart = Math.max(0, currentNormIndex - 20);
+      const farPos = normalizedScript.indexOf(anchor, globalStart);
+      if(farPos !== -1){
+        const candidate = farPos + anchor.length - 1;
+        const jump = candidate - currentNormIndex;
+        // 远跳需要至少 16 个连续字符完全匹配，且单次仍限制在 180 字以内。
+        if(jump >= 0 && jump <= 180) return candidate;
+      }
+    }
+
+    return null;
   }
 
   function setStatus(text, live=false){
@@ -368,6 +412,7 @@
         els.transcript.textContent = spoken;
         const pos = findSpeechPosition(spoken);
         if(pos !== null){
+          // 只允许很小幅回退，避免识别纠正时画面乱跳
           if(pos >= currentNormIndex - 8){
             currentNormIndex = Math.max(currentNormIndex, pos);
             updateHighlight(currentNormIndex, true);
@@ -390,6 +435,7 @@
 
     recognition.onend = () => {
       if(listening){
+        // Chrome 可能会自动结束会话，自动重启保持连续识别
         clearTimeout(restartTimer);
         restartTimer = setTimeout(() => {
           try{ recognition.start(); }catch(e){}
@@ -398,6 +444,10 @@
         setStatus('已暂停');
         els.startBtn.textContent = '开始声控';
       }
+    };
+
+    recognition.onnomatch = () => {
+      // 不匹配时保持当前位置，不主动跳段
     };
   }
 

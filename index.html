@@ -87,7 +87,6 @@ textarea{
   font-weight:300;
   line-height:1.95;
 }
-textarea::placeholder{color:rgba(150,140,120,.72)}
 textarea:focus{border-bottom-color:rgba(232,180,99,.34)}
 .save-wrap{display:flex;flex-direction:column;align-items:center;margin-top:46px}
 .save-btn{
@@ -170,8 +169,8 @@ textarea:focus{border-bottom-color:rgba(232,180,99,.34)}
       <h1>感恩日记</h1>
     </div>
     <div class="compose-center">
-      <div class="question" id="question">今天，有什么值得感谢？</div>
-      <textarea id="entryInput" placeholder="写下今天想记住的事……" autofocus></textarea>
+      <div class="question" id="question">今天要感谢的是</div>
+      <textarea id="entryInput" autofocus></textarea>
       <div class="save-wrap">
         <button class="save-btn" id="saveBtn">记下</button>
         <div class="save-feedback" id="saveFeedback" aria-live="polite">已记下</div>
@@ -211,23 +210,12 @@ const undoBtn=document.getElementById('undoBtn');
 
 function setCopy(){
   const h=new Date().getHours();
-  if(h>=5&&h<11){
-    eyebrow.textContent='一　日　之　计';
-    question.textContent='今天，有什么值得感谢？';
-    input.placeholder='写下今天第一件值得感恩的事……';
-  }else if(h>=11&&h<17){
-    eyebrow.textContent='静　下　心　来';
-    question.textContent='这一刻，有什么值得感谢？';
-    input.placeholder='写下这一刻想记住的事……';
-  }else if(h>=17&&h<22){
-    eyebrow.textContent='灯　下　时　分';
-    question.textContent='今天，有什么值得感谢？';
-    input.placeholder='写下今天想记住的事……';
-  }else{
-    eyebrow.textContent='夜　深　人　静';
-    question.textContent='今晚，有什么值得感谢？';
-    input.placeholder='写下今晚想记住的事……';
-  }
+  if(h>=5&&h<11)eyebrow.textContent='一　日　之　计';
+  else if(h>=11&&h<17)eyebrow.textContent='静　下　心　来';
+  else if(h>=17&&h<22)eyebrow.textContent='灯　下　时　分';
+  else eyebrow.textContent='夜　深　人　静';
+  question.textContent='今天要感谢的是';
+  input.removeAttribute('placeholder');
 }
 
 function createId(ts,index=0){return 'g_'+String(ts)+'_'+String(index)+'_'+Math.random().toString(36).slice(2,6)}
